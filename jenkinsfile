@@ -550,7 +550,7 @@ See details: ${env.BUILD_URL}""",
     // Run 3 additional parallel jobs after node C completion
     stage('Run Additional Parallel Jobs') {
         parallel(
-            BX_SD_setup_wiz_basic: {
+           "BX_SD_setup_wiz_basic": {
                 node('baxter') {
                     // Throttle -- Jenkins pipeline doesn't natively throttle by time, only by concurrency.
                     // You can simulate by checking last build time, or rely on classic 'throttle' plugins.
@@ -673,7 +673,7 @@ See details: ${env.BUILD_URL}""",
                     }
                 }
             },
-            BX_SD_smoke_upgrade: {
+            "BX_SD_smoke_upgrade": {
                 node('baxter') {
                     deleteDir()
                     timeout(time: 240, unit: 'MINUTES') {
@@ -794,7 +794,7 @@ See details: ${env.BUILD_URL}""",
                     }
                 }
             },
-            BX_SD_v21.1r1_smoke_upgrade: {
+            "BX_SD_v21.1r1_smoke_upgrade": {
                 node('baxter') {
                     deleteDir()
                     timeout(time: 240, unit: 'MINUTES') {
@@ -918,7 +918,7 @@ See details: ${env.BUILD_URL}""",
 
 } 
             },
-            BX_SD_v21.1r1: {
+            "BX_SD_v21.1r1": {
                 node('baxter') {
                     stage('On nodeD') {
                         echo "This stage runs on nodeD"
