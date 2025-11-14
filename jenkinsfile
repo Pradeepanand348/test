@@ -1,0 +1,339 @@
+node('scms_build_centos_va') {
+    // Set environment variables
+    env.GIT_BRANCH       = "${git_branch}"
+    env.GIT_CREDS        = "${git_credentials}"
+    env.GIT_URL          = "${git_url}"
+    env.GIT_BROWSER_URL  = "https://bitbucket.cam.zeus.com/projects/SD/repos/sd-build"
+
+    def NOCACHE          = 1
+    def MASTERWKSPACE    = "${ZWORKSPACE}/var/lib/jenkins/jobs/${env.JOB_NAME}/workspace/products"
+    def SLAVEWKSPACE     = "${ZWORKSPACE}/jenkins_slave_user/localhome/jenkins_slave_user/workspace/${env.JOB_NAME}/products"
+
+    stage('Check out SD-Core repo') {
+        checkout([
+            $class: 'GitSCM',
+            branches: [[name: "*/${env.GIT_BRANCH}"]],
+            userRemoteConfigs: [
+                [credentialsId: env.GIT_CREDS, url: env.GIT_URL]
+            ]
+        ])
+    }
+
+    stage('Get commit short') {
+        env.GIT_COMMIT_SHORT = sh(
+            script: "git rev-parse --short HEAD",
+            returnStdout: true
+        ).trim()
+        echo "Commit short hash: ${env.GIT_COMMIT_SHORT}"
+    }
+
+    stage('SD-CORE-BUILD') {
+        catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE'){
+            sh """
+                export NOCACHE=${NOCACHE}
+                export MASTERWKSPACE=${MASTERWKSPACE}
+                export SLAVEWKSPACE=${SLAVEWKSPACE}
+                echo "No cache: \$NOCACHE"
+                echo "Master workspace: \$MASTERWKSPACE"
+                echo "Slave workspace: \$SLAVEWKSPACE"
+                if [ -d \$MASTERWKSPACE ]; then rm -rf \$MASTERWKSPACE ; fi
+                if [ -d \$SLAVEWKSPACE ]; then rm -rf \$SLAVEWKSPACE ; fi
+
+                tar -zcvf test_licenses-${env.GIT_COMMIT_SHORT}.tgz products/scms/mim/test_licenses/*
+                tar -zcvhf test_certs-${env.GIT_COMMIT_SHORT}.tgz products/scms/mim/test_certs/*
+                tar -zcvf linux_scripts-${env.GIT_COMMIT_SHORT}.tgz products/scms/mim/deployment/scripts/linux/*
+
+                ./conftool
+                cd products/scms/mim
+
+                export VABUILD=Y
+                #make build_tgz build_qa_tgz rpm
+                #echo "P4_CHANGELIST=${env.GIT_COMMIT_SHORT}" > buildVars.txt
+            """
+        }
+    }
+
+    stage('Copy Artifacts to bannow-builder') {
+        sh """
+            rsync -r /home/jenkins_slave_user/space/artifacts/*.rpm jenkins@10.34.132.15:/work/artifacts/sd-repo/ || true
+            rsync -r /home/jenkins_slave_user/space/artifacts/buildVars.txt jenkins@10.34.132.15:/work/artifacts/sd-repo/ || true
+        """
+    }
+}
+
+node('bannow-builder') {
+    env.GIT_BRANCH      = "${git_branch}"
+    env.GIT_CREDS       = "${git_credentials}"
+    env.GIT_URL1        = "${git_url1}"
+    env.GIT_BROWSER_URL = "https://bitbucket.cam.zeus.com/projects/SD/repos/sd-build"
+
+    stage('Check out sd-build repo') {
+        checkout([
+            $class: 'GitSCM',
+            branches: [[name: "*/${env.GIT_BRANCH}"]],
+            userRemoteConfigs: [
+                [credentialsId: env.GIT_CREDS, url: env.GIT_URL1]
+            ],
+            browser: [$class: 'Stash', repoUrl: env.GIT_BROWSER_URL]
+        ])
+        echo "GIT_BROWSER_URL is set to: ${env.GIT_BROWSER_URL}"
+    }
+
+    stage('Archive and Copy Artifacts') {
+        sh """  
+            rm -rf sd-repo
+            mkdir -p sd-repo
+            cp /work/artifacts/sd-repo/*.rpm /work/jenkins/jenkins_root/workspace/master/sd-repo/
+            cp /work/artifacts/sd-repo/buildVars.txt /work/jenkins/jenkins_root/workspace/master/sd-repo/
+        """
+    }
+
+    stage('SD-build') {
+        catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE'){
+            sh """
+                export LOG_LEVEL=DEBUG
+                export PUBLISH_HOSTS=us-sd-builds.englab.brocade.com
+                export BUILDS_TO_KEEP=3
+                export BUILD_QCOW2=yes
+                export SD_RPMS=${WORKSPACE}/sd-repo
+                ./run-build.sh
+            """
+        }
+    }
+}
+
+node('ami-builder') {
+   
+        env.GIT_BRANCH  = "${git_branch}"
+        env.GIT_CREDS   = "${git_credentials}"
+        env.GIT_URL1    = "${git_url1}"
+        env.BUILD_JOB   = "${BUILD_JOB}"
+
+        stage('Check out sd-build repo') {
+            checkout([
+                $class: 'GitSCM',
+                branches: [[name: "*/${env.GIT_BRANCH}"]],
+                userRemoteConfigs: [
+                    [credentialsId: env.GIT_CREDS, url: env.GIT_URL1]
+                ]
+            ])
+        }
+
+        stage('AMI-BUILD') {
+            catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE'){
+            sh """
+                cd scripts
+                rsync -avz jenkins@10.34.132.15:/work/builds/master/latest/build-number.txt /home/jenkins_slave_user/workspace/master/scripts/
+                rsync -avz jenkins@10.34.132.15:/work/builds/master/latest/deliverables/bin/image_vmware/image.ova /home/jenkins_slave_user/workspace/master/scripts
+                mv image.ova vmware_image.ova
+                chmod 700 sd-ami-build.pem
+                python ova_to_ami_remote.py --build=\$(cat build-number.txt) vmware_image.ova
+                #python ova_to_ami_remote.py --live --build=20.1 vmware_image.ova
+            """
+        }
+     }
+ }
+
+
+node('baxter') {
+        env.GIT_BRANCH  = "${git_branch}"
+        env.GIT_CREDS   = "${git_credentials}"
+        env.GIT_URL2    = "${git_url2}"
+    try {
+        stage('master-Build Retrieval') {
+            catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE'){
+            sh """
+ssh -T root@10.34.132.26 <<EOF
+    cd toolbox
+    git pull origin master 
+    cd tools/retrieve_builds
+    python -u retrieve_sd_builds.py --branch master --server 10.34.132.15
+EOF
+"""
+        }
+        }
+        stage('Run in Parallel on Multiple Nodes') {
+        parallel(
+            nodeA: {
+                node('baxter') { 
+
+    // Clean workspace (deleteDir() removes the contents)
+    deleteDir()
+
+    // Timeout (absolute, in minutes)
+    timeout(time: 240, unit: 'MINUTES') {
+
+        try {
+
+            stage('Checkout') {
+                 checkout([
+                $class: 'GitSCM',
+                branches: [[name: "*/${env.GIT_BRANCH}"]],
+                userRemoteConfigs: [
+                    [credentialsId: env.GIT_CREDS, url: env.GIT_URL2]
+                ]
+            ])
+            }
+            stage('Prepare Environment') {
+                dir('baxter_taf') {
+                    // Create prep_local_env.json file
+                    writeFile file: 'prep_local_env.json', text: '''
+{
+    "id": "jenkins_job_sm_test",
+    "infrastructure_location": "UK",
+    "framework": {
+        "defaults": {
+            "default_va_platform": "kvm"
+        },
+        "selenium_server": {
+            "connection_type": "grid"
+        },
+        "iph_server": {
+            "target_host": "10.62.149.127"
+        },
+        "dev_options": {
+            "deployment": {
+                "async": true
+            },
+            "initial_setup": {
+                "headless_setup": true
+            }
+        }
+    },
+    "builds": {
+        "sd": {
+            "kvm": "<BUILD_SERV>/Services_Director/master/latest/kvm_image.qcow2"
+        },
+        "vtm": {
+            "preset_id": "vtm_19.1"
+        }
+    }
+}
+'''
+                }
+            }
+
+            stage('Execute Tests') {
+                dir('baxter_taf') {
+                    // Prepare environment
+                    sh '''
+                        ./prep_local_env.sh
+                        . framework/environment/virtual_env/bin/activate
+                        cd tests
+                        nosetests -s --exe -a prod=sd,type=smoke --with-xunit
+                    '''
+                }
+            }
+
+            stage('Publish Test Results') {
+                // Publish JUnit XML (if available)
+                junit '**/nosetests.xml'
+            }
+
+        } catch (err) {
+            currentBuild.result = 'FAILURE'
+            echo "Build failed: ${err}"
+            throw err
+        } finally {
+
+            // Archive logs from artifacts
+            archiveArtifacts '**/baxter_taf/tests/artifacts/logs/**'
+            // Optionally, clean up workspace
+            deleteDir()
+
+        } // end finally
+
+    } // end timeout
+
+    stage('Post-build Analysis') {
+        // This logic models your Groovy Postbuild Script, but uses available pipeline methods.
+
+        def testResults = null
+        try {
+            // Try to load JUnit results (assumes junit step above)
+            testResults = currentBuild.rawBuild.getAction(hudson.tasks.junit.TestResultAction)
+        } catch (e) {
+            testResults = null
+        }
+
+        if(testResults == null) {
+            echo 'POSTBUILD: No test data found.... Marking as aborted.'
+            currentBuild.result = 'ABORTED'
+        } else {
+            def passCount = testResults.getPassedTestsCount()
+            def failCount = testResults.getFailedTestsCount()
+            def skipCount = testResults.getSkippedTestsCount()
+            def totalCount = passCount + failCount + skipCount
+
+            echo "Test Results: Passed ${passCount}, Failed ${failCount}, Skipped ${skipCount}, Total ${totalCount}"
+
+            if ((skipCount > passCount) && (skipCount > failCount)) {
+                echo 'POSTBUILD: More tests skipped than passed. Marking as unstable.'
+                currentBuild.result = 'UNSTABLE'
+            } else if(skipCount > 0) {
+                echo 'POSTBUILD: Some tests skipped, please investigate.'
+                currentBuild.result = 'UNSTABLE'
+            }
+            // Pass rate comparisons with previous build not natively possible in pipeline without storing history.
+        }
+    }
+
+    stage('Email Notification') {
+        // Use Email Extension Plugin in pipeline
+        // For advanced scripting, see https://plugins.jenkins.io/email-ext/
+        emailext (
+            subject: "Build ${currentBuild.result}: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+            body: """
+                Build URL: ${env.BUILD_URL}
+                Result: ${currentBuild.result}
+            """,
+            to: 'jwhitehe@pulsesecure.net rcoxhill@pulsesecure.net dmankellow@pulsesecure.net abean@pulsesecure.net'
+        )
+    }
+
+} 
+            },
+            nodeB: {
+                node('baxter') {
+                    stage('On nodeB') {
+                        echo "This stage runs on nodeB"
+                        // Add steps for nodeB
+                    }
+                }
+            },
+            nodeC: {
+                node('baxter') {
+                    stage('On nodeC') {
+                        echo "This stage runs on nodeC"
+                        // Add steps for nodeC
+                    }
+                }
+            },
+            nodeD: {
+                node('baxter') {
+                    stage('On nodeD') {
+                        echo "This stage runs on nodeD"
+                        // Add steps for nodeD
+                    }
+                }
+            }
+        )
+    }
+} catch (e) {
+        currentBuild.result = 'FAILURE'
+        throw e
+    } finally {
+        stage('Notify') {
+            emailext(
+                subject: "Jenkins Build #${env.BUILD_NUMBER} - ${currentBuild.result}",
+                body: """
+Build ${currentBuild.result}: ${env.JOB_NAME} [${env.BUILD_NUMBER}]
+Check console output at ${env.BUILD_URL}
+                """,
+                to: 'pradeep.anand@ivanti.com'
+            )
+        }
+    }
+}
+
+    
