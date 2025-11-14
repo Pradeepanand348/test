@@ -96,7 +96,7 @@ node('bannow-builder') {
                 export BUILDS_TO_KEEP=3
                 export BUILD_QCOW2=yes
                 export SD_RPMS=${WORKSPACE}/sd-repo
-               # ./run-build.sh
+                ./run-build.sh
             """
         }
     }
@@ -467,7 +467,6 @@ See details: ${env.BUILD_URL}""",
             }
 
             stage('Execute Tests for BX_SD_smoke_master') {
-                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE'){
                 dir('baxter_taf') {
                     // Prepare environment
                     sh '''
@@ -478,13 +477,12 @@ See details: ${env.BUILD_URL}""",
                     '''
                 }
             }
-        }
+
             stage('Publish Test Results for BX_SD_smoke_master') {
-                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE'){
                 // Publish JUnit XML (if available)
                 junit '**/nosetests.xml'
             }
-            }
+
         } catch (err) {
             currentBuild.result = 'FAILURE'
             echo "Build failed: ${err}"
@@ -501,7 +499,6 @@ See details: ${env.BUILD_URL}""",
     } // end timeout
 
     stage('Post-build Analysis for BX_SD_smoke_master') {
-        catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE'){
         // This logic models your Groovy Postbuild Script, but uses available pipeline methods.
 
         def testResults = null
@@ -533,7 +530,7 @@ See details: ${env.BUILD_URL}""",
             // Pass rate comparisons with previous build not natively possible in pipeline without storing history.
         }
     }
- }
+
     stage('Email Notification for BX_SD_smoke_master') {
         // Use Email Extension Plugin in pipeline
         // For advanced scripting, see https://plugins.jenkins.io/email-ext/
@@ -550,7 +547,7 @@ See details: ${env.BUILD_URL}""",
     // Run 3 additional parallel jobs after node C completion
     stage('Run Additional Parallel Jobs') {
         parallel(
-            setupWizBasic: {
+            BX_SD_setup_wiz_basic: {
                 node('baxter') {
                     // Throttle -- Jenkins pipeline doesn't natively throttle by time, only by concurrency.
                     // You can simulate by checking last build time, or rely on classic 'throttle' plugins.
@@ -563,7 +560,7 @@ See details: ${env.BUILD_URL}""",
                         // Clean before build (delete workspace)
                         deleteDir()
                         
-                        stage('Checkout') {
+                        stage('Checkout For BX_SD_setup_wiz_basic') {
                             checkout([
                                 $class: 'GitSCM',
                                 branches: [[name: "*/${env.GIT_BRANCH}"]],
@@ -607,8 +604,7 @@ See details: ${env.BUILD_URL}""",
                         }
 
                         // Main shell commands
-                        stage('Test Execution') {
-                            catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE'){
+                        stage('Test Execution For BX_SD_setup_wiz_basic') {
                             dir('baxter_taf') {
                                 sh '''
                                     set -ex
@@ -624,20 +620,19 @@ See details: ${env.BUILD_URL}""",
                                 '''
                             }
                         }
-                    }
+
                         // Publish test results
-                        stage('Test Results') {
+                        stage('Test Results For BX_SD_setup_wiz_basic') {
                             junit allowEmptyResults: true, testResults: '**/nosetests.xml'
                         }
 
                         // Archive logs
-                        stage('Archive Logs') {
+                        stage('Archive Logs For BX_SD_setup_wiz_basic') {
                             archiveArtifacts artifacts: '**/baxter_taf/tests/artifacts/logs/**', allowEmptyArchive: true
                         }
 
                         // Postbuild Groovy logic - This can't run as a classic Groovy Postbuild (Scripted pipeline can't use 'manager'), but you *can* replicate it using regular Groovy here:
-                        stage('Post Build Analysis') {
-                            catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE'){
+                        stage('Post Build Analysis For BX_SD_setup_wiz_basic') {
                             // Over-simplified, example: Mark unstable if too many skipped tests.
                             def testResult = null
                             try {
@@ -659,9 +654,9 @@ See details: ${env.BUILD_URL}""",
                                 }
                             }
                         }
-                        }
+
                         // Email notification on failure/unstable/success
-                        stage('Notify') {
+                        stage('Notify For BX_SD_setup_wiz_basic') {
                             emailext (
                                 subject: "Jenkins Job: ${env.JOB_NAME} - Build #${env.BUILD_NUMBER} - ${currentBuild.currentResult}",
                                 body: "See Jenkins for details: ${env.BUILD_URL}",
@@ -673,12 +668,12 @@ See details: ${env.BUILD_URL}""",
                     }
                 }
             },
-            smokeUpgrade: {
+            BX_SD_smoke_upgrade: {
                 node('baxter') {
                     deleteDir()
                     timeout(time: 240, unit: 'MINUTES') {
                         try {
-                            stage('Checkout for BX_SD_smoke_upgrade') {
+                            stage('Checkout For BX_SD_smoke_upgrade') {
                                 checkout([
                                     $class: 'GitSCM',
                                     branches: [[name: "*/${env.GIT_BRANCH}"]],
@@ -715,10 +710,12 @@ See details: ${env.BUILD_URL}""",
     },
     "builds": {
         "sd": {
-            "kvm": "<BUILD_SERV>/Services_Director/master/latest/kvm_image.qcow2"
+            "esx": "<BUILD_SERV>/Services_Director/release-21.1r2/latest/vmware_image.ova",
+            "product_version": "21.1",
+            "upgrade": "http://uk-sd-builds.cam.zeus.com/Services_Director/release-21.1r2/latest/vmware_image.img"
         },
         "vtm": {
-            "preset_id": "vtm_19.1"
+            "preset_id": "vtm_20.1"
         }
     }
 }
@@ -732,7 +729,7 @@ See details: ${env.BUILD_URL}""",
                                         ./prep_local_env.sh
                                         . framework/environment/virtual_env/bin/activate
                                         cd tests
-                                        nosetests -s --exe -a prod=sd,type=smoke_upgrade --with-xunit
+                                        nosetests -s --exe -a prod=sd,type=upgrade_smoke --with-xunit
                                     '''
                                 }
                             }
@@ -792,12 +789,12 @@ See details: ${env.BUILD_URL}""",
                     }
                 }
             },
-            v21SmokeUpgrade: {
+            BX_SD_v21.1r1_smoke_upgrade: {
                 node('baxter') {
                     deleteDir()
                     timeout(time: 240, unit: 'MINUTES') {
                         try {
-                            stage('Checkout for BX_SD_v21.1r1_smoke_upgrade') {
+                            stage('Checkout For BX_SD_v21.1r1_smoke_upgrade') {
                                 checkout([
                                     $class: 'GitSCM',
                                     branches: [[name: "*/${env.GIT_BRANCH}"]],
@@ -834,7 +831,7 @@ See details: ${env.BUILD_URL}""",
     },
     "builds": {
         "sd": {
-            "kvm": "<BUILD_SERV>/Services_Director/Releases/21.1r1/kvm_image.qcow2"
+            "esx": "<BUILD_SERV>/Services_Director/master/latest/vmware_image.ova"
         },
         "vtm": {
             "preset_id": "vtm_21.1"
@@ -851,7 +848,7 @@ See details: ${env.BUILD_URL}""",
                                         ./prep_local_env.sh
                                         . framework/environment/virtual_env/bin/activate
                                         cd tests
-                                        nosetests -s --exe -a prod=sd,type=smoke_upgrade,version=21.1r1 --with-xunit
+                                        nosetests -s --exe -a prod=sd,type=smoke --with-xunit
                                     '''
                                 }
                             }
