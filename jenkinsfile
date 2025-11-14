@@ -154,7 +154,7 @@ EOF
         }
         stage('Run in Parallel on Multiple Nodes') {
         parallel(
-            nodeA: {
+            BX_SD_KVM_smoke_master: {
                 node('baxter') { 
 
     // Clean workspace (deleteDir() removes the contents)
@@ -293,7 +293,7 @@ EOF
 
 } 
             },
-            nodeB: {
+            BX_SD_analytics_smoke: {
                 node('baxter') { // 'baxter' label restricts node
 
     // Optionally clean workspace before build
@@ -407,7 +407,7 @@ See details: ${env.BUILD_URL}""",
     }
 }
             },
-            nodeC: {
+            BX_SD_smoke_master: {
                 node('baxter') { 
 
     // Clean workspace (deleteDir() removes the contents)
@@ -918,7 +918,7 @@ See details: ${env.BUILD_URL}""",
 
 } 
             },
-            nodeD: {
+            BX_SD_v21.1r1: {
                 node('baxter') {
                     stage('On nodeD') {
                         echo "This stage runs on nodeD"
