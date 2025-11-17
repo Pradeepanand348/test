@@ -214,6 +214,7 @@ EOF
             }
 
             stage('Execute Tests For BX_SD_KVM_smoke_master') {
+                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE'){
                 dir('baxter_taf') {
                     // Prepare environment
                     sh '''
@@ -223,11 +224,13 @@ EOF
                         nosetests -s --exe -a prod=sd,type=smoke --with-xunit
                     '''
                 }
+              }
             }
-
             stage('Publish Test Results For BX_SD_KVM_smoke_master') {
+                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE'){
                 // Publish JUnit XML (if available)
                 junit '**/nosetests.xml'
+                }
             }
 
         } catch (err) {
@@ -247,7 +250,7 @@ EOF
 
     stage('Post-build Analysis For BX_SD_KVM_smoke_master') {
         // This logic models your Groovy Postbuild Script, but uses available pipeline methods.
-
+        catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE'){
         def testResults = null
         try {
             // Try to load JUnit results (assumes junit step above)
@@ -276,8 +279,8 @@ EOF
             }
             // Pass rate comparisons with previous build not natively possible in pipeline without storing history.
         }
+     }
     }
-
     stage('Email Notification For BX_SD_KVM_smoke_master') {
         // Use Email Extension Plugin in pipeline
         // For advanced scripting, see https://plugins.jenkins.io/email-ext/
@@ -339,6 +342,7 @@ EOF
     }
 
     stage('Build & Test For BX_SD_analytics_smoke') {
+        catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE'){
         dir('baxter_taf') {
             // SSH agent for private key before build if needed (for external pulls, etc.)
             // withCredentials([sshUserPrivateKey(credentialsId: 'bannow-key', keyFileVariable: 'SSH_KEY')]) {
@@ -353,18 +357,20 @@ EOF
                 nosetests -s --exe -a prod=sd,type=analytics_smoke,func=analytics_app --with-xunit
             '''
         }
+     }
     }
-
     stage('Publish Test Results & Artifacts For BX_SD_analytics_smoke') {
         // Publish JUnit results
+        catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE'){
         junit allowEmptyResults: true, testResults: '**/nosetests.xml'
 
         // Archive logs/artifacts
         archiveArtifacts artifacts: '**/baxter_taf/tests/artifacts/logs/**'
+     }
     }
-
     stage('Groovy Postbuild Logic For BX_SD_analytics_smoke ') {
         // Simulate Groovy postbuild logic (test skip/fail/pass handling)
+        
         def result = null
         try {
             // Parse nosetests.xml
@@ -388,9 +394,10 @@ EOF
                 echo "GROOVY POSTBUILD: Some tests skipped."
                 // etc.
             }
-        } catch (e) {
+         
+     }catch (e) {
             echo "GROOVY POSTBUILD: No test data found..."
-            currentBuild.result = 'ABORTED'
+          currentBuild.result = 'ABORTED'
         }
     }
 
@@ -729,6 +736,7 @@ See details: ${env.BUILD_URL}""",
                             }
                             
                             stage('Execute Tests for BX_SD_smoke_upgrade') {
+                                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE'){
                                 dir('baxter_taf') {
                                     sh '''
                                         ./prep_local_env.sh
@@ -737,12 +745,13 @@ See details: ${env.BUILD_URL}""",
                                         nosetests -s --exe -a prod=sd,type=upgrade_smoke --with-xunit
                                     '''
                                 }
+                             }
                             }
-                            
                             stage('Publish Test Results for BX_SD_smoke_upgrade') {
+                                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE'){
                                 junit '**/nosetests.xml'
+                             }
                             }
-                            
                         } catch (err) {
                             currentBuild.result = 'FAILURE'
                             echo "Build failed: ${err}"
@@ -848,6 +857,7 @@ See details: ${env.BUILD_URL}""",
                             }
                             
                             stage('Execute Tests for BX_SD_v21.1r1_smoke_upgrade') {
+                                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE'){
                                 dir('baxter_taf') {
                                     sh '''
                                         ./prep_local_env.sh
@@ -857,9 +867,11 @@ See details: ${env.BUILD_URL}""",
                                     '''
                                 }
                             }
-                            
+                            }
                             stage('Publish Test Results for BX_SD_v21.1r1_smoke_upgrade') {
+                                 catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE'){
                                 junit '**/nosetests.xml'
+                             }
                             }
                             
                         } catch (err) {
@@ -920,9 +932,123 @@ See details: ${env.BUILD_URL}""",
             },
             "BX_SD_v21.1r1": {
                 node('baxter') {
-                    stage('On nodeD') {
-                        echo "This stage runs on nodeD"
-                        // Add steps for nodeD
+                   deleteDir()
+                    timeout(time: 240, unit: 'MINUTES') {
+                        try {
+                            stage('Checkout for BX_SD_v21.1r1') {
+                                checkout([
+                                    $class: 'GitSCM',
+                                    branches: [[name: "*/${env.GIT_BRANCH}"]],
+                                    userRemoteConfigs: [
+                                        [credentialsId: env.GIT_CREDS, url: env.GIT_URL2]
+                                    ]
+                                ])
+                            }
+                            
+                            stage('Prepare Environment for BX_SD_v21.1r1') {
+                                dir('baxter_taf') {
+                                    writeFile file: 'prep_local_env.json', text: '''
+{
+    "id": "jenkins_job_sm_test",
+    "infrastructure_location": "UK",
+    "framework": {
+        "defaults": {
+            "default_va_platform": "kvm"
+        },
+        "selenium_server": {
+            "connection_type": "grid"
+        },
+        "iph_server": {
+            "target_host": "10.62.149.127"
+        },
+        "dev_options": {
+            "deployment": {
+                "async": true
+            },
+            "initial_setup": {
+                "headless_setup": true
+            }
+        }
+    },
+    "builds": {
+        "sd": {
+             "esx": "<BUILD_SERV>/Services_Director/release-21.1r1/latest/vmware_image.ova"
+        },
+        "vtm": {
+            "preset_id": "vtm_21.1"
+        }
+    }
+}
+'''
+                                }
+                            }
+                            
+                            stage('Execute Tests for BX_SD_v21.1r1') {
+                                catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE'){
+                                dir('baxter_taf') {
+                                    sh '''
+                                        ./prep_local_env.sh
+                                        . framework/environment/virtual_env/bin/activate
+                                        cd tests
+                                        nosetests -s --exe -a prod=sd,type=smoke --with-xunit
+                                    '''
+                                }
+                            }
+                            }
+                            stage('Publish Test Results for BX_SD_v21.1r1') {
+                                 catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE'){
+                                junit '**/nosetests.xml'
+                             }
+                            }
+                            
+                        } catch (err) {
+                            currentBuild.result = 'FAILURE'
+                            echo "Build failed: ${err}"
+                            throw err
+                        } finally {
+                            archiveArtifacts '**/baxter_taf/tests/artifacts/logs/**'
+                            deleteDir()
+                        }
+                    }
+                    
+                    stage('Post-build Analysis for BX_SD_v21.1r1') {
+                        def testResults = null
+                        try {
+                            testResults = currentBuild.rawBuild.getAction(hudson.tasks.junit.TestResultAction)
+                        } catch (e) {
+                            testResults = null
+                        }
+                        
+                        if(testResults == null) {
+                            echo 'POSTBUILD: No test data found.... Marking as aborted.'
+                            currentBuild.result = 'ABORTED'
+                        } else {
+                            def passCount = testResults.getPassedTestsCount()
+                            def failCount = testResults.getFailedTestsCount()
+                            def skipCount = testResults.getSkippedTestsCount()
+                            def totalCount = passCount + failCount + skipCount
+                            
+                            echo "Test Results: Passed ${passCount}, Failed ${failCount}, Skipped ${skipCount}, Total ${totalCount}"
+                            
+                            if ((skipCount > passCount) && (skipCount > failCount)) {
+                                echo 'POSTBUILD: More tests skipped than passed. Marking as unstable.'
+                                currentBuild.result = 'UNSTABLE'
+                            } else if(skipCount > 0) {
+                                echo 'POSTBUILD: Some tests skipped, please investigate.'
+                                currentBuild.result = 'UNSTABLE'
+                            }
+                        }
+                    }
+                    
+                    stage('Email Notification for BX_SD_v21.1r1') {
+                        emailext (
+                            subject: "Build ${currentBuild.result}: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                            body: """
+                                Build URL: ${env.BUILD_URL}
+                                Result: ${currentBuild.result}
+                            """,
+                            to: 'divya.vinodhkumar@ivanti.com'
+                        )
                     }
                 }
             }
