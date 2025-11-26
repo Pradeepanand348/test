@@ -1,0 +1,294 @@
+#!/usr/bin/env groovy
+
+/**
+ * SD Build Pipeline - Shared Library Version
+ * 
+ * This is the modernized version of the SD Build pipeline using
+ * Jenkins shared libraries for better maintainability and reusability.
+ * 
+ * Usage:
+ * - Configure your Jenkins to load this shared library
+ * - Set up the pipeline parameters in Jenkins
+ * - Run the pipeline
+ */
+
+@Library('your-shared-library') _
+
+pipeline {
+    agent none
+    
+    parameters {
+        choice(
+            name: 'GIT_BRANCH',
+            choices: ['master', 'develop', 'release/21.1', 'release/21.2'],
+            description: 'Git branch to build'
+        )
+        string(
+            name: 'GIT_CREDENTIALS',
+            defaultValue: 'git-credentials',
+            description: 'Git credentials ID'
+        )
+        string(
+            name: 'GIT_URL',
+            defaultValue: 'https://bitbucket.cam.zeus.com/scm/sd/sd-core.git',
+            description: 'Git repository URL for SD Core'
+        )
+        string(
+            name: 'GIT_URL1',
+            defaultValue: 'https://bitbucket.cam.zeus.com/scm/sd/sd-build.git',
+            description: 'Git repository URL for SD Build'
+        )
+        string(
+            name: 'GIT_URL2',
+            defaultValue: 'https://bitbucket.cam.zeus.com/scm/sd/baxter-taf.git',
+            description: 'Git repository URL for Test Framework'
+        )
+        string(
+            name: 'BUILD_JOB',
+            defaultValue: 'SD-BUILD-MASTER',
+            description: 'Build job identifier'
+        )
+        string(
+            name: 'NOTIFICATION_EMAIL',
+            defaultValue: 'pradeep.anand@ivanti.com',
+            description: 'Email for build notifications'
+        )
+        booleanParam(
+            name: 'SKIP_TESTS',
+            defaultValue: false,
+            description: 'Skip test execution'
+        )
+        booleanParam(
+            name: 'PARALLEL_BUILDS',
+            defaultValue: true,
+            description: 'Run builds in parallel (after SCMS core)'
+        )
+        choice(
+            name: 'LOG_LEVEL',
+            choices: ['INFO', 'DEBUG', 'WARN', 'ERROR'],
+            description: 'Build log level'
+        )
+    }
+    
+    environment {
+        BUILD_TIMESTAMP = sh(script: 'date +%Y%m%d_%H%M%S', returnStdout: true).trim()
+        ZWORKSPACE = '/opt/jenkins'
+    }
+    
+    stages {
+        stage('Initialize Pipeline') {
+            agent any
+            steps {
+                script {
+                    echo """
+🚀 Starting SD Build Pipeline
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 Configuration:
+   • Branch: ${params.GIT_BRANCH}
+   • Build Timestamp: ${env.BUILD_TIMESTAMP}
+   • Parallel Builds: ${params.PARALLEL_BUILDS}
+   • Skip Tests: ${params.SKIP_TESTS}
+   • Log Level: ${params.LOG_LEVEL}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+                    """
+                    
+                    // Validate parameters
+                    if (!params.GIT_BRANCH) {
+                        error("GIT_BRANCH parameter is required")
+                    }
+                    
+                    // Set global environment variables
+                    env.GIT_BRANCH = params.GIT_BRANCH
+                    env.GIT_CREDS = params.GIT_CREDENTIALS
+                    env.NOTIFICATION_EMAIL = params.NOTIFICATION_EMAIL
+                }
+            }
+        }
+        
+        stage('SCMS Core Build') {
+            steps {
+                script {
+                    echo "🔨 Starting SCMS Core Build on scms_build_centos_va node"
+                    
+                    try {
+                        scmsBuild {
+                            gitBranch = params.GIT_BRANCH
+                            gitCredentials = params.GIT_CREDENTIALS
+                            gitUrl = params.GIT_URL
+                            notificationEmail = params.NOTIFICATION_EMAIL
+                            timeout = 60
+                            noCache = 1
+                        }
+                        
+                        echo "✅ SCMS Core Build completed successfully - proceeding with downstream builds"
+                        
+                    } catch (Exception e) {
+                        echo "❌ SCMS Core Build failed - stopping pipeline"
+                        currentBuild.result = 'FAILURE'
+                        
+                        notificationUtils().sendFailureNotification([
+                            stage: 'SCMS Core Build',
+                            error: e.getMessage(),
+                            jobName: env.JOB_NAME,
+                            buildNumber: env.BUILD_NUMBER,
+                            buildUrl: env.BUILD_URL,
+                            gitBranch: params.GIT_BRANCH,
+                            recipients: params.NOTIFICATION_EMAIL
+                        ])
+                        
+                        error("Pipeline terminated due to SCMS Core Build failure: ${e.getMessage()}")
+                    }
+                }
+            }
+        }
+        
+        stage('Downstream Builds') {
+            when {
+                expression { currentBuild.result != 'FAILURE' }
+            }
+            steps {
+                script {
+                    echo "🚀 Starting downstream builds after successful SCMS Core Build"
+                    
+                    if (params.PARALLEL_BUILDS) {
+                        // Run builds in parallel
+                        parallel(
+                            "Bannow Builder": {
+                                bannowBuild {
+                                    gitBranch = params.GIT_BRANCH
+                                    gitCredentials = params.GIT_CREDENTIALS
+                                    gitUrl = params.GIT_URL1
+                                    timeout = 45
+                                    logLevel = params.LOG_LEVEL
+                                    publishHosts = 'us-sd-builds.englab.brocade.com'
+                                    buildsToKeep = 3
+                                    buildQcow2 = 'yes'
+                                }
+                            },
+                            "AMI Builder": {
+                                amiBuild {
+                                    gitBranch = params.GIT_BRANCH
+                                    gitCredentials = params.GIT_CREDENTIALS
+                                    gitUrl = params.GIT_URL1
+                                    buildJob = params.BUILD_JOB
+                                    timeout = 60
+                                }
+                            }
+                        )
+                    } else {
+                        // Run builds sequentially
+                        bannowBuild {
+                            gitBranch = params.GIT_BRANCH
+                            gitCredentials = params.GIT_CREDENTIALS
+                            gitUrl = params.GIT_URL1
+                            timeout = 45
+                        }
+                        
+                        amiBuild {
+                            gitBranch = params.GIT_BRANCH
+                            gitCredentials = params.GIT_CREDENTIALS
+                            gitUrl = params.GIT_URL1
+                            buildJob = params.BUILD_JOB
+                            timeout = 60
+                        }
+                    }
+                    
+                    echo "✅ All downstream builds completed successfully"
+                }
+            }
+        }
+        
+        stage('Test Execution') {
+            when {
+                allOf {
+                    expression { currentBuild.result != 'FAILURE' }
+                    not { params.SKIP_TESTS }
+                }
+            }
+            steps {
+                script {
+                    echo "🧪 Starting comprehensive test suite"
+                    
+                    try {
+                        testSuite {
+                            gitBranch = params.GIT_BRANCH
+                            gitCredentials = params.GIT_CREDENTIALS
+                            gitUrl = params.GIT_URL2
+                            testTypes = ['smoke', 'analytics', 'upgrade']
+                            timeout = 240
+                        }
+                        
+                        echo "✅ All test suites completed successfully"
+                        
+                    } catch (Exception e) {
+                        echo "⚠️ Test execution encountered issues: ${e.getMessage()}"
+                        currentBuild.result = 'UNSTABLE'
+                        
+                        notificationUtils().sendUnstableNotification([
+                            jobName: env.JOB_NAME,
+                            buildNumber: env.BUILD_NUMBER,
+                            buildUrl: env.BUILD_URL,
+                            gitBranch: params.GIT_BRANCH,
+                            recipients: params.NOTIFICATION_EMAIL
+                        ])
+                    }
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            script {
+                echo "🏁 Pipeline execution completed with result: ${currentBuild.result ?: 'SUCCESS'}"
+                
+                // Send final notification
+                notificationUtils().sendBuildNotification([
+                    result: currentBuild.result ?: 'SUCCESS',
+                    jobName: env.JOB_NAME,
+                    buildNumber: env.BUILD_NUMBER,
+                    buildUrl: env.BUILD_URL,
+                    gitBranch: params.GIT_BRANCH,
+                    buildTimestamp: env.BUILD_TIMESTAMP,
+                    recipients: params.NOTIFICATION_EMAIL
+                ])
+            }
+        }
+        
+        success {
+            script {
+                echo "🎉 Pipeline completed successfully!"
+                
+                // Archive any remaining artifacts
+                try {
+                    archiveArtifacts artifacts: '**/build-artifacts/**', allowEmptyArchive: true
+                    archiveArtifacts artifacts: '**/test-reports/**', allowEmptyArchive: true
+                } catch (Exception e) {
+                    echo "⚠️ Could not archive some artifacts: ${e.getMessage()}"
+                }
+            }
+        }
+        
+        failure {
+            script {
+                echo "❌ Pipeline failed!"
+                echo "📊 Final build status: ${currentBuild.result}"
+                echo "🔍 Check console output for details: ${env.BUILD_URL}console"
+            }
+        }
+        
+        unstable {
+            script {
+                echo "⚠️ Pipeline completed but marked as unstable"
+                echo "🔍 Review test results and build logs for issues"
+            }
+        }
+        
+        cleanup {
+            script {
+                echo "🧹 Performing pipeline cleanup"
+                // Add any necessary cleanup tasks here
+            }
+        }
+    }
+}
