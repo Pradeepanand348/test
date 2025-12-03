@@ -65,9 +65,9 @@ node('scms_build_centos_va') {
 
                 #export VABUILD=Y
                 #make build_tgz build_qa_tgz rpm
-                podman-compose up 
-                podman pod prune -f
-                echo "P4_CHANGELIST=${env.GIT_COMMIT_SHORT}" > buildVars.txt
+                #podman-compose up 
+                #podman pod prune -f
+                #echo "P4_CHANGELIST=${env.GIT_COMMIT_SHORT}" > buildVars.txt
             """
         }
     }
@@ -106,6 +106,7 @@ node('bannow-builder') {
     }
 
     stage('Copy-Artifacts-From-SD-CORE') {
+        catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE'){
         sh """  
             rm -rf sd-repo
             mkdir -p sd-repo
@@ -113,7 +114,7 @@ node('bannow-builder') {
             rsync -avz jenkins_slave_user@10.34.132.14:/localhome/jenkins_slave_user/workspace/master/output/*.rpm /work/jenkins/jenkins_root/workspace/master/sd-repo/
         """
     }
-
+    }
     stage('SD-build') {
        // catchError(buildResult: 'SUCCESS', stageResult: 'FAILURE'){
             sh """
